@@ -6,7 +6,8 @@ import threading
 import numpy as np
 
 from audio_utils import read_wav
-from diarization import assign_speakers, label_robot_by_talk_time
+from diarization import assign_speakers, label_robot_by_talk_time, trim_silence
+from segmenter import split_long
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODELS_DIR = os.path.join(ROOT, "models")
@@ -114,7 +115,7 @@ def _split_by_pauses(segments, gap=0.7):
     for seg in segments:
         words = seg["words"]
         if len(words) < 2:
-            out.append({"start": seg["start"], "end": seg["end"], "text": seg["text"]})
+            out.append({"start": seg["start"], "end": seg["end"], "text": seg["text"], "words": words})
             continue
         chunk = [words[0]]
         for w in words[1:]:
@@ -128,17 +129,48 @@ def _split_by_pauses(segments, gap=0.7):
 
 def _chunk_to_seg(words):
     return {"start": words[0]["start"], "end": words[-1]["end"],
-            "text": "".join(w["word"] for w in words).strip()}
+            "text": "".join(w["word"] for w in words).strip(), "words": words}
+
+
+def _fix_mid_sentence_changes(segments, max_gap=2.5):
+    """Собеседник не меняется посреди предложения.
+
+    Если фраза оборвалась без знака конца предложения, а её продолжение отнесено
+    к другому говорящему, короткий кусок отдаётся тому, кому принадлежит длинный.
+    """
+    for a, b in zip(segments, segments[1:]):
+        if a["speaker"] == b["speaker"] or b["start"] - a["end"] > max_gap:
+            continue
+        if _ends_sentence(a["text"]):
+            continue
+        # голос куска не совпал с соседом — значит, Whisper поставил его на чужой звук;
+        # реальное место куска — вплотную к соседу, с которым он составляет одно предложение
+        if (a["end"] - a["start"]) < (b["end"] - b["start"]):
+            a["speaker"] = b["speaker"]
+            a["start"] = max(a["start"], b["start"] - 0.6)
+            a["end"] = max(a["start"] + 0.1, b["start"] - 0.05)
+        else:
+            b["speaker"] = a["speaker"]
+            b["start"] = min(b["start"], a["end"] + 0.05)
+            b["end"] = min(b["end"], max(b["start"] + 0.1, a["end"] + 0.6))
+    return segments
+
+
+def _ends_sentence(text):
+    return bool(re.search(r"[.!?…][\"»”)]*$", text.strip()))
 
 
 def _merge_same_speaker(segments, max_gap=1.2):
     out = []
     for s in segments:
-        if out and out[-1]["speaker"] == s["speaker"] and s["start"] - out[-1]["end"] <= max_gap:
+        # внутри незаконченного предложения допускаем паузу подольше
+        gap = max_gap if out and _ends_sentence(out[-1]["text"]) else max_gap * 2
+        if out and out[-1]["speaker"] == s["speaker"] and s["start"] - out[-1]["end"] <= gap:
             out[-1]["end"] = max(out[-1]["end"], s["end"])
             out[-1]["text"] = (out[-1]["text"] + " " + s["text"]).strip()
+            out[-1]["words"] = out[-1].get("words", []) + s.get("words", [])
         else:
-            out.append(dict(s))
+            out.append(dict(s, words=list(s.get("words", []))))
     return out
 
 
@@ -157,8 +189,11 @@ def _channels_are_separate(stereo):
     return not np.isfinite(corr) or abs(corr) < 0.8
 
 
-def transcribe(asr_wav, model_name, language, status_cb, progress_cb):
-    """Возвращает список реплик [{speaker, start, end, text}], отсортированных по времени."""
+def transcribe(asr_wav, model_name, language, status_cb, progress_cb, max_chars=0):
+    """Возвращает список реплик [{speaker, start, end, text}], отсортированных по времени.
+
+    max_chars > 0 — длинные фразы делятся на несколько баблов по предложениям.
+    """
     audio, rate = read_wav(asr_wav)
     assert rate == 16000
     model = get_model(model_name, status_cb)
@@ -183,8 +218,11 @@ def transcribe(asr_wav, model_name, language, status_cb, progress_cb):
         status_cb("Распознавание речи…")
         res = _run_whisper(model, mono, language, progress_cb)
         status_cb("Определение говорящих…")
-        segments = assign_speakers(mono, _split_by_pauses(res))
+        pieces = trim_silence(mono, _split_by_pauses(res))
+        segments = _fix_mid_sentence_changes(assign_speakers(mono, pieces))
 
     segments = _merge_same_speaker(segments)
+    if max_chars:
+        segments = split_long(segments, max_chars)
     return [{"speaker": s["speaker"], "start": round(float(s["start"]), 2), "end": round(float(s["end"]), 2),
              "text": s["text"]} for s in segments]

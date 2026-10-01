@@ -68,6 +68,8 @@ async function initUpload() {
     $("#uploadError").textContent = "Не удалось получить настройки: " + e.message;
   }
   $("#langSelect").value = lsGet("lang", "ru");
+  $("#maxCharsUpload").value = lsGet("maxChars", "200");
+  $("#maxChars").value = lsGet("maxChars", "200") === "0" ? "200" : lsGet("maxChars", "200");
   loadRecent();
 }
 
@@ -108,11 +110,13 @@ function upload() {
   if (!state.file) return;
   lsSet("model", $("#modelSelect").value);
   lsSet("lang", $("#langSelect").value);
+  lsSet("maxChars", $("#maxCharsUpload").value);
   const fd = new FormData();
   fd.append("file", state.file);
   fd.append("model", $("#modelSelect").value);
   fd.append("language", $("#langSelect").value);
   fd.append("skip_asr", $("#skipAsr").checked ? "1" : "0");
+  fd.append("max_chars", $("#maxCharsUpload").value);
 
   show("progress");
   $("#progressTitle").textContent = "Загрузка файла…";
@@ -190,8 +194,8 @@ function openEditor(job) {
     if (v === undefined || v === null) continue;
     if (el.type === "checkbox") el.checked = !!v; else el.value = v;
   }
-  renderList();
   show("edit");
+  renderList();
   updatePreview();
 }
 
@@ -212,9 +216,19 @@ function renderList() {
   const list = $("#segList");
   list.innerHTML = "";
   state.segments.forEach((seg, i) => list.appendChild(makeRow(seg, i)));
+  // высоту полей можно посчитать только после вставки в страницу
+  list.querySelectorAll("textarea").forEach(autoGrow);
   if (!state.segments.length) {
-    list.innerHTML = '<div class="card muted center">Реплик нет. Нажмите «＋ Реплика», чтобы добавить.</div>';
+    list.innerHTML = '<div class="card muted center">Баблов нет. Нажмите «＋ Добавить бабл».</div>';
   }
+  updateGrouping();
+}
+
+// баблы одного говорящего подряд показываем ближе друг к другу, как в чате
+function updateGrouping() {
+  document.querySelectorAll("#segList .seg").forEach((row, i) => {
+    row.classList.toggle("cont", i > 0 && state.segments[i - 1].speaker === state.segments[i].speaker);
+  });
 }
 
 function makeRow(seg, i) {
@@ -238,6 +252,7 @@ function makeRow(seg, i) {
   node.querySelector(".speaker").onclick = () => {
     seg.speaker = seg.speaker === "robot" ? "client" : "robot";
     setSpeakerUI();
+    updateGrouping();
     changed();
   };
   ta.oninput = () => {
@@ -271,7 +286,7 @@ function makeRow(seg, i) {
   node.querySelector(".merge").onclick = () => mergeSeg(i);
   node.querySelector(".insert").onclick = () => insertAfter(i);
   node.querySelector(".del").onclick = () => {
-    if (seg.text.trim() && !confirm("Удалить реплику?")) return;
+    if (seg.text.trim() && !confirm("Удалить этот бабл?")) return;
     state.segments.splice(i, 1);
     renderList();
     changed();
@@ -302,14 +317,12 @@ function splitSeg(i, pos) {
   let cut = Math.max(0, Math.min(text.length, pos));
   const left = text.slice(0, cut).trim();
   const right = text.slice(cut).trim();
-  if (!left || !right) { alert("Поставьте курсор в тексте в то место, где нужно разделить реплику."); return; }
+  if (!left || !right) { alert("Поставьте курсор в тексте в то место, где нужно разделить бабл."); return; }
   const frac = cut / text.length;
   const mid = +(seg.start + (seg.end - seg.start) * frac).toFixed(2);
-  const other = seg.speaker === "robot" ? "client" : "robot";
-  state.segments.splice(i, 1,
-    { ...seg, text: left, end: mid },
-    { ...seg, text: right, start: mid, speaker: other });
+  state.segments.splice(i, 1, { ...seg, text: left, end: mid }, { ...seg, text: right, start: mid });
   renderList();
+  focusRow(i + 1);
   changed();
 }
 
@@ -324,9 +337,12 @@ function mergeSeg(i) {
 function insertAfter(i) {
   const prev = state.segments[i];
   const next = state.segments[i + 1];
-  const start = prev ? prev.end : 0;
-  const end = Math.min(next ? next.start : state.job.duration, start + 2);
-  const seg = { speaker: prev && prev.speaker === "robot" ? "client" : "robot", start, end: Math.max(start, end), text: "" };
+  const dur = state.job.duration;
+  const start = Math.min(prev ? prev.end : 0, dur);
+  // если до следующего бабла нет паузы, новый бабл длится 1.5 с (время можно поправить)
+  let end = Math.min(next ? next.start : dur, start + 2);
+  if (end - start < 0.5) end = Math.min(dur, start + 1.5);
+  const seg = { speaker: prev && prev.speaker === "robot" ? "client" : "robot", start, end, text: "" };
   state.segments.splice(i + 1, 0, seg);
   renderList();
   focusRow(i + 1);
@@ -341,6 +357,29 @@ function addAtCurrentTime() {
   renderList();
   focusRow(state.segments.indexOf(seg));
   changed();
+}
+
+async function splitLong() {
+  const before = state.segments.length;
+  try {
+    const res = await api("/api/job/" + state.jobId + "/split", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ segments: state.segments, max_chars: +$("#maxChars").value }),
+    });
+    state.segments = (await res.json()).segments;
+  } catch (e) { $("#editError").textContent = e.message; return; }
+  renderList();
+  changed();
+  const added = state.segments.length - before;
+  flash(added > 0 ? "Добавлено баблов: " + added : "Длинных баблов не найдено");
+}
+
+function flash(msg) {
+  const el = $("#flash");
+  el.textContent = msg;
+  el.hidden = false;
+  clearTimeout(flash.t);
+  flash.t = setTimeout(() => (el.hidden = true), 2500);
 }
 
 function focusRow(i) {
@@ -412,7 +451,7 @@ async function updatePreview() {
 async function startRender() {
   $("#editError").textContent = "";
   const empty = state.segments.filter((s) => !s.text.trim()).length;
-  if (empty && !confirm("Есть реплики без текста (" + empty + "). Они не попадут в видео. Продолжить?")) return;
+  if (empty && !confirm("Есть пустые баблы (" + empty + "). Они не попадут в видео. Продолжить?")) return;
   $("#audio").pause();
   clearTimeout(saveTimer);
   try {
@@ -500,6 +539,13 @@ function bind() {
     changed();
   };
   $("#addBtn").onclick = addAtCurrentTime;
+  let resizeTimer = null;
+  window.addEventListener("resize", () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => document.querySelectorAll("#segList textarea").forEach(autoGrow), 150);
+  });
+  $("#splitLongBtn").onclick = splitLong;
+  $("#maxChars").onchange = () => lsSet("maxChars", $("#maxChars").value);
   $("#previewBtn").onclick = updatePreview;
   SETTINGS_FIELDS.forEach((f) => $("#" + f).addEventListener("change", () => changed()));
   $("#robotName").addEventListener("input", () => changed(false));

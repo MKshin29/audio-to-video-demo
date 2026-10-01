@@ -129,7 +129,18 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 .times input { padding: 3px 6px; font-size: 13px; font-variant-numeric: tabular-nums; }
 .times input.bad { border-color: var(--danger); }
 .seg textarea { resize: vertical; min-height: 62px; line-height: 1.4; }
-.seg-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+.seg-actions { display: flex; }
+.seg-footer { grid-column: 2 / 4; display: flex; gap: 4px 16px; flex-wrap: wrap; margin-top: -4px; }
+.seg.cont { margin-top: -4px; }
+.link {
+  border: 0; background: none; padding: 2px 0; font: inherit; font-size: 13px; color: var(--muted); cursor: pointer;
+}
+.link:hover { color: var(--accent-dark); }
+.link.del:hover { color: var(--danger); }
+.link:disabled { opacity: .4; cursor: default; color: var(--muted); }
+.btn-group { display: inline-flex; }
+.btn-group .btn { border-radius: 8px 0 0 8px; }
+.btn-group select { width: auto; border-radius: 0 8px 8px 0; border-left: 0; padding: 6px 8px; font-size: 13px; }
 .icon {
   width: 30px; height: 30px; border: 1px solid var(--border); background: #fff; border-radius: 7px;
   cursor: pointer; font-size: 14px; color: var(--muted); padding: 0;
@@ -155,7 +166,14 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
   .editor-side { position: static; }
   .seg { grid-template-columns: 1fr; }
   .seg.client { margin-left: 16px; } .seg.robot { margin-right: 16px; }
-  .seg-actions { grid-template-columns: repeat(5, 30px); }
+  .seg-footer { grid-column: 1; }
+  .sticky-player { position: static; }
   .steps { display: none; }
   .form-row { flex-direction: column; gap: 0; }
+}
+
+.flash {
+  position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); z-index: 20;
+  background: #1d2129; color: #fff; padding: 10px 18px; border-radius: 10px; font-size: 14px;
+  box-shadow: 0 6px 20px #0003;
 }

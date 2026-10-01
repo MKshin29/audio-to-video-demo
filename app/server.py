@@ -23,6 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import audio_utils  # noqa: E402
 import transcriber  # noqa: E402
 from renderer import ChatRenderer, render_video  # noqa: E402
+from segmenter import split_long  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WORKSPACE = os.path.join(ROOT, "workspace")
@@ -98,6 +99,7 @@ def transcribe_worker(job):
                 os.path.join(d, "asr.wav"), job["model"], job["language"],
                 status_cb=lambda m: update(job, message=m),
                 progress_cb=lambda p: job.update(progress=round(p, 3)),
+                max_chars=job.get("max_chars", 0),
             )
         update(job, status="ready", segments=segments, progress=1.0, message="Готово")
     except Exception as e:
@@ -126,6 +128,14 @@ def render_worker(job, segments, out_name):
 
 
 # ---------------------------------------------------------------- маршруты
+@app.after_request
+def no_cache(resp):
+    # интерфейс всегда берём свежий — после обновления инструмента не нужен Ctrl+F5
+    if request.path == "/" or request.path.startswith("/static/"):
+        resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
+
 @app.route("/")
 def index():
     return send_from_directory(STATIC, "index.html")
@@ -186,6 +196,7 @@ def upload():
         "id": job_id, "filename": f.filename, "created": time.time(), "duration": round(duration, 3),
         "channels": ch, "model": request.form.get("model", "small"),
         "language": request.form.get("language", "ru"),
+        "max_chars": _int(request.form.get("max_chars"), 0),
         "status": "queued", "progress": 0.0, "message": "В очереди…", "segments": [],
         "settings": {}, "render_status": None,
     }
@@ -213,6 +224,22 @@ def save_segments(job_id):
     update(job, segments=clean_segments(data.get("segments", []), job["duration"]),
            settings=data.get("settings", job.get("settings", {})))
     return jsonify(ok=True)
+
+
+def _int(value, default):
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return default
+
+
+@app.route("/api/job/<job_id>/split", methods=["POST"])
+def split_segments(job_id):
+    """Делит длинные баблы по предложениям (кнопка «Разбить длинные» в редакторе)."""
+    job = get_job(job_id)
+    data = request.get_json(force=True)
+    segs = clean_segments(data.get("segments", []), job["duration"])
+    return jsonify(segments=split_long(segs, _int(data.get("max_chars"), 200)))
 
 
 def clean_segments(segments, duration):

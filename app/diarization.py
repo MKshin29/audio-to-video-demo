@@ -55,22 +55,6 @@ def _mfcc(x):
     return mfcc[:, 1:], energy  # c0 (громкость) не используем
 
 
-def segment_features(audio, start, end):
-    """Вектор признаков одной реплики: среднее и разброс MFCC по озвученным кадрам."""
-    a = int(max(0.0, start) * SR)
-    b = int(max(start + 0.05, end) * SR)
-    x = audio[a:b]
-    if len(x) < N_FFT:
-        return None
-    mfcc, energy = _mfcc(x)
-    # берём только громкие кадры — там действительно звучит голос
-    thr = np.percentile(energy, 40)
-    voiced = mfcc[energy >= thr]
-    if len(voiced) < 3:
-        voiced = mfcc
-    return np.concatenate([voiced.mean(axis=0), voiced.std(axis=0)])
-
-
 def _kmeans2(X, weights, n_init=10, iters=50, seed=0):
     rng = np.random.default_rng(seed)
     best_labels, best_inertia = None, np.inf
@@ -94,32 +78,102 @@ def _kmeans2(X, weights, n_init=10, iters=50, seed=0):
     return best_labels
 
 
-def assign_speakers(audio, segments):
-    """Проставляет segment['speaker'] = 'robot' | 'client' для моно-записи."""
+def _voiced_frames(audio, start, end):
+    a = int(max(0.0, start) * SR)
+    b = int(max(start + 0.05, end) * SR)
+    x = audio[a:b]
+    if len(x) < N_FFT:
+        return None
+    mfcc, energy = _mfcc(x)
+    voiced = mfcc[energy >= np.percentile(energy, 40)]
+    return voiced if len(voiced) >= 3 else mfcc
+
+
+def assign_speakers(audio, segments, iterations=8):
+    """Проставляет segment['speaker'] = 'robot' | 'client' для моно-записи.
+
+    1. Длинные фразы (надёжный материал) делятся на 2 группы k-means по среднему тембру.
+    2. По кадрам каждой группы строится модель голоса (гауссиана в пространстве MFCC).
+    3. Каждая фраза, включая короткие, относится к голосу, который лучше объясняет её кадры;
+       модели уточняются по новой разметке, пока она не перестанет меняться.
+    """
     if not segments:
         return segments
-    feats, ok = [], []
-    for i, s in enumerate(segments):
-        f = segment_features(audio, s["start"], s["end"])
-        if f is not None:
-            feats.append(f)
-            ok.append(i)
+    frames = [_voiced_frames(audio, s["start"], s["end"]) for s in segments]
+    ok = [i for i, f in enumerate(frames) if f is not None]
     labels = np.zeros(len(segments), dtype=int)
-    if len(feats) >= 2:
-        X = np.array(feats)
+    if len(ok) >= 2:
+        allf = np.concatenate([frames[i] for i in ok])
+        mu, sd = allf.mean(axis=0), allf.std(axis=0) + 1e-6
+        norm = {i: (frames[i] - mu) / sd for i in ok}
+        dur = {i: segments[i]["end"] - segments[i]["start"] for i in ok}
+
+        # 1. начальное разбиение по длинным фразам
+        seed = [i for i in ok if dur[i] >= 1.5]
+        if len(seed) < 2:
+            seed = ok
+        X = np.array([np.concatenate([norm[i].mean(axis=0), norm[i].std(axis=0)]) for i in seed])
         X = (X - X.mean(axis=0)) / (X.std(axis=0) + 1e-6)
-        w = np.array([max(0.3, segments[i]["end"] - segments[i]["start"]) for i in ok])
-        lab = _kmeans2(X, w)
-        for j, i in enumerate(ok):
-            labels[i] = lab[j]
-        # реплики без признаков (слишком короткие) — как у соседа слева
+        lab = _kmeans2(X, np.array([max(0.3, dur[i]) for i in seed]))
+        cur = {i: int(l) for i, l in zip(seed, lab)}
+
+        # 2–3. модели голосов и переразметка всех фраз
+        for _ in range(iterations):
+            models = []
+            for k in range(2):
+                fk = [norm[i] for i in cur if cur[i] == k]
+                if not fk:
+                    break
+                fk = np.concatenate(fk)
+                models.append((fk.mean(axis=0), fk.var(axis=0) + 0.05))
+            if len(models) < 2:
+                break
+            new = {}
+            for i in ok:
+                ll = [(-0.5 * (((norm[i] - m) ** 2) / v + np.log(v)).sum(axis=1)).mean() for m, v in models]
+                new[i] = int(np.argmax(ll))
+            if new == cur:
+                break
+            cur = new
+        for i in ok:
+            labels[i] = cur.get(i, 0)
+        # фразы без признаков (слишком короткие) — как у соседа слева
         ok_set = set(ok)
-        for i in range(len(segments)):
-            if i not in ok_set and i > 0:
+        for i in range(1, len(segments)):
+            if i not in ok_set:
                 labels[i] = labels[i - 1]
     for s, lab in zip(segments, labels):
         s["speaker"] = int(lab)
     return label_robot_by_talk_time(segments)
+
+
+def trim_silence(audio, segments, pad=0.08):
+    """Сдвигает границы фраз к реальному началу и концу речи.
+
+    Whisper часто растягивает первое слово ответа на паузу перед ним — из-за этого
+    бабл появлялся бы раньше, чем человек заговорил.
+    """
+    hop = int(0.02 * SR)
+    n = len(audio) // hop
+    if n == 0:
+        return segments
+    rms = np.sqrt((audio[: n * hop].reshape(n, hop) ** 2).mean(axis=1))
+    floor = np.percentile(rms, 10)
+    for s in segments:
+        a, b = int(s["start"] / 0.02), min(n, int(np.ceil(s["end"] / 0.02)))
+        if b - a < 3:
+            continue
+        seg = rms[a:b]
+        thr = max(floor * 4, seg.max() * 0.12)
+        idx = np.nonzero(seg > thr)[0]
+        if len(idx) == 0:
+            continue
+        new_start = (a + idx[0]) * 0.02 - pad
+        new_end = (a + idx[-1] + 1) * 0.02 + pad
+        if new_end - new_start >= 0.2:
+            s["start"] = max(s["start"], new_start)
+            s["end"] = min(s["end"], new_end)
+    return segments
 
 
 def label_robot_by_talk_time(segments):

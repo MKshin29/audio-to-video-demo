@@ -43,7 +43,15 @@
           </select>
         </label>
       </div>
-      <label class="check"><input type="checkbox" id="skipAsr"> Не распознавать — введу реплики вручную</label>
+      <label>Длинные фразы делить на несколько баблов по предложениям
+        <select id="maxCharsUpload">
+          <option value="150">до ~150 символов в бабле</option>
+          <option value="200" selected>до ~200 символов в бабле (рекомендуется)</option>
+          <option value="300">до ~300 символов в бабле</option>
+          <option value="0">не делить</option>
+        </select>
+      </label>
+      <label class="check"><input type="checkbox" id="skipAsr"> Не распознавать — введу баблы вручную</label>
       <div class="actions">
         <button class="btn primary big" id="uploadBtn" disabled>Распознать</button>
       </div>
@@ -79,14 +87,21 @@
           <div class="toolbar">
             <span class="file-name" id="fileName"></span>
             <span class="spacer"></span>
-            <button class="btn" id="swapBtn" title="Все реплики робота станут репликами клиента и наоборот">⇄ Поменять роли</button>
-            <button class="btn" id="addBtn" title="Добавить реплику в текущий момент воспроизведения">＋ Реплика</button>
+            <button class="btn" id="swapBtn" title="Все баблы робота станут баблами клиента и наоборот">⇄ Поменять роли</button>
+            <button class="btn" id="addBtn" title="Добавить бабл в текущий момент воспроизведения">＋ Добавить бабл</button>
+            <span class="btn-group" title="Длинные баблы делятся на несколько по предложениям">
+              <button class="btn" id="splitLongBtn">✂ Разбить длинные</button>
+              <select id="maxChars">
+                <option value="150">до 150 симв.</option>
+                <option value="200" selected>до 200 симв.</option>
+                <option value="300">до 300 симв.</option>
+              </select>
+            </span>
             <button class="btn primary" id="renderBtn">Далее: создать видео →</button>
           </div>
           <div class="error" id="editError"></div>
-          <p class="muted small hint">Проверьте текст и говорящего у каждой реплики. Кнопка ▶ проигрывает реплику,
-            ◷ подставляет текущее время плеера. ✂ или Ctrl+Enter — разделить реплику по курсору
-            (вторая часть отдаётся другому говорящему).</p>
+          <p class="muted small hint">Каждая карточка — один бабл в чате. Проверьте текст и говорящего; ▶ проигрывает бабл,
+            ◷ подставляет текущее время плеера. «Разделить» (или Ctrl+Enter) делит бабл на два по курсору.</p>
         </div>
         <div id="segList" class="seg-list"></div>
       </div>
@@ -170,17 +185,20 @@
         <div class="time-field"><input class="t-end" title="Конец (мин:сек)"><button class="icon now-end" title="Конец = текущее время плеера">◷</button></div>
       </div>
     </div>
-    <textarea class="text" rows="2" placeholder="Текст реплики"></textarea>
+    <textarea class="text" rows="2" placeholder="Текст бабла"></textarea>
     <div class="seg-actions">
-      <button class="icon play" title="Прослушать реплику">▶</button>
-      <button class="icon split" title="Разделить по курсору (Ctrl+Enter)">✂</button>
-      <button class="icon merge" title="Объединить со следующей">⤓</button>
-      <button class="icon insert" title="Вставить реплику после">＋</button>
-      <button class="icon del" title="Удалить">✕</button>
+      <button class="icon play" title="Прослушать бабл">▶</button>
+    </div>
+    <div class="seg-footer">
+      <button class="link split" title="Разделить бабл на два по позиции курсора (Ctrl+Enter)">✂ Разделить</button>
+      <button class="link merge" title="Объединить со следующим баблом">⤓ Объединить со следующим</button>
+      <button class="link insert" title="Вставить новый бабл после этого">＋ Бабл ниже</button>
+      <button class="link del" title="Удалить этот бабл">✕ Удалить</button>
     </div>
   </div>
 </template>
 
+<div id="flash" class="flash" hidden></div>
 <script src="/static/app.js"></script>
 </body>
 </html>
