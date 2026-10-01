@@ -1,0 +1,7 @@
+venv/
+workspace/
+models/*
+!models/README.txt
+__pycache__/
+*.pyc
+wheels/

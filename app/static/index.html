@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Аудио → видео-чат</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand" id="homeLink" title="На главную">
+    <span class="logo">▶</span> Аудио → видео-чат
+  </div>
+  <ol class="steps">
+    <li data-step="upload">1. Загрузка</li>
+    <li data-step="edit">2. Расшифровка</li>
+    <li data-step="video">3. Видео</li>
+  </ol>
+</header>
+
+<main>
+  <!-- Шаг 1: загрузка -->
+  <section id="screen-upload" class="screen">
+    <div class="card upload-card">
+      <h1>Загрузите запись разговора</h1>
+      <p class="muted">Звонок клиента и голосового робота. Подойдут WAV, MP3, OGG, M4A, FLAC и другие форматы.
+        Всё обрабатывается локально на этом компьютере.</p>
+      <label id="dropzone" class="dropzone">
+        <input type="file" id="fileInput" accept="audio/*,video/*,.wav,.mp3,.ogg,.oga,.opus,.m4a,.aac,.flac,.wma,.amr,.webm">
+        <div class="dz-icon">🎧</div>
+        <div class="dz-title" id="dzTitle">Перетащите файл сюда или нажмите, чтобы выбрать</div>
+        <div class="dz-sub muted" id="dzSub">Стереозаписи (робот и клиент в разных каналах) разделяются точнее всего</div>
+      </label>
+      <div class="form-row">
+        <label>Модель распознавания
+          <select id="modelSelect"></select>
+        </label>
+        <label>Язык
+          <select id="langSelect">
+            <option value="ru">Русский</option>
+            <option value="auto">Определить автоматически</option>
+            <option value="en">Английский</option>
+          </select>
+        </label>
+      </div>
+      <label class="check"><input type="checkbox" id="skipAsr"> Не распознавать — введу реплики вручную</label>
+      <div class="actions">
+        <button class="btn primary big" id="uploadBtn" disabled>Распознать</button>
+      </div>
+      <div class="error" id="uploadError"></div>
+    </div>
+
+    <div class="card" id="recentCard" hidden>
+      <h2>Недавние записи</h2>
+      <ul class="recent" id="recentList"></ul>
+    </div>
+  </section>
+
+  <!-- Прогресс распознавания -->
+  <section id="screen-progress" class="screen" hidden>
+    <div class="card progress-card">
+      <h1 id="progressTitle">Распознавание…</h1>
+      <p class="muted" id="progressMsg"></p>
+      <div class="bar"><div class="bar-fill" id="progressFill"></div></div>
+      <p class="muted small" id="progressHint">Первый запуск модели может занять несколько минут: она скачивается один раз и дальше работает без интернета.</p>
+      <div class="error" id="progressError"></div>
+      <div class="actions"><button class="btn" id="progressBack" hidden>Назад</button></div>
+    </div>
+  </section>
+
+  <!-- Шаг 2: редактор -->
+  <section id="screen-edit" class="screen" hidden>
+    <div class="editor">
+      <div class="editor-main">
+        <div class="card sticky-player">
+          <div class="player-row">
+            <audio id="audio" controls preload="auto"></audio>
+          </div>
+          <div class="toolbar">
+            <span class="file-name" id="fileName"></span>
+            <span class="spacer"></span>
+            <button class="btn" id="swapBtn" title="Все реплики робота станут репликами клиента и наоборот">⇄ Поменять роли</button>
+            <button class="btn" id="addBtn" title="Добавить реплику в текущий момент воспроизведения">＋ Реплика</button>
+            <button class="btn primary" id="renderBtn">Далее: создать видео →</button>
+          </div>
+          <div class="error" id="editError"></div>
+          <p class="muted small hint">Проверьте текст и говорящего у каждой реплики. Кнопка ▶ проигрывает реплику,
+            ◷ подставляет текущее время плеера. ✂ или Ctrl+Enter — разделить реплику по курсору
+            (вторая часть отдаётся другому говорящему).</p>
+        </div>
+        <div id="segList" class="seg-list"></div>
+      </div>
+
+      <aside class="editor-side">
+        <div class="card">
+          <h2>Оформление</h2>
+          <label>Имя робота в чате
+            <input type="text" id="robotName" value="Голосовой ассистент">
+          </label>
+          <div class="form-row">
+            <label>Тема
+              <select id="theme">
+                <option value="light">Светлая</option>
+                <option value="dark">Тёмная</option>
+                <option value="green">Зелёная</option>
+              </select>
+            </label>
+            <label>Качество
+              <select id="resolution">
+                <option value="1080">1080×1920</option>
+                <option value="720">720×1280 (быстрее)</option>
+              </select>
+            </label>
+          </div>
+          <div class="form-row">
+            <label>Появление текста
+              <select id="reveal">
+                <option value="words">По словам, как звучит</option>
+                <option value="instant">Сразу всей репликой</option>
+              </select>
+            </label>
+            <label>Часы на экране
+              <input type="text" id="clock" placeholder="9:41" maxlength="5">
+            </label>
+          </div>
+          <label class="check"><input type="checkbox" id="showTimes" checked> Время реплики в сообщении</label>
+        </div>
+        <div class="card preview-card">
+          <div class="preview-head">
+            <h2>Предпросмотр</h2>
+            <button class="btn small" id="previewBtn" title="Кадр в момент текущего времени плеера">Обновить</button>
+          </div>
+          <div class="phone"><img id="previewImg" alt=""></div>
+          <p class="muted small center">Кадр в момент текущего времени плеера</p>
+        </div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- Шаг 3: видео -->
+  <section id="screen-video" class="screen" hidden>
+    <div class="card video-card">
+      <div id="renderProgress">
+        <h1>Создание видео…</h1>
+        <p class="muted" id="renderMsg">Это займёт примерно столько же времени, сколько длится запись, или меньше.</p>
+        <div class="bar"><div class="bar-fill" id="renderFill"></div></div>
+      </div>
+      <div id="renderDone" hidden>
+        <h1>Видео готово</h1>
+        <div class="video-wrap"><video id="video" controls playsinline></video></div>
+        <div class="actions">
+          <a class="btn primary big" id="downloadLink" href="#">⬇ Скачать MP4</a>
+        </div>
+      </div>
+      <div class="error" id="renderError"></div>
+      <div class="actions">
+        <button class="btn" id="backToEdit">← Вернуться к расшифровке</button>
+        <button class="btn" id="newFile">Новый файл</button>
+      </div>
+    </div>
+  </section>
+</main>
+
+<template id="segTpl">
+  <div class="seg">
+    <div class="seg-left">
+      <button class="speaker" title="Сменить говорящего"></button>
+      <div class="times">
+        <div class="time-field"><input class="t-start" title="Начало (мин:сек)"><button class="icon now-start" title="Начало = текущее время плеера">◷</button></div>
+        <div class="time-field"><input class="t-end" title="Конец (мин:сек)"><button class="icon now-end" title="Конец = текущее время плеера">◷</button></div>
+      </div>
+    </div>
+    <textarea class="text" rows="2" placeholder="Текст реплики"></textarea>
+    <div class="seg-actions">
+      <button class="icon play" title="Прослушать реплику">▶</button>
+      <button class="icon split" title="Разделить по курсору (Ctrl+Enter)">✂</button>
+      <button class="icon merge" title="Объединить со следующей">⤓</button>
+      <button class="icon insert" title="Вставить реплику после">＋</button>
+      <button class="icon del" title="Удалить">✕</button>
+    </div>
+  </div>
+</template>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
