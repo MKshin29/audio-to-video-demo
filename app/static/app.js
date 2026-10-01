@@ -56,6 +56,7 @@ async function initUpload() {
     const cfg = await (await api("/api/config")).json();
     const sel = $("#modelSelect");
     sel.innerHTML = "";
+    state.models = cfg.models;
     for (const m of cfg.models) {
       const o = document.createElement("option");
       o.value = m.id;
@@ -64,6 +65,7 @@ async function initUpload() {
     }
     sel.value = lsGet("model", "small");
     if (!sel.value) sel.value = "small";
+    updateModelHint();
   } catch (e) {
     $("#uploadError").textContent = "Не удалось получить настройки: " + e.message;
   }
@@ -71,6 +73,48 @@ async function initUpload() {
   $("#maxCharsUpload").value = lsGet("maxChars", "200");
   $("#maxChars").value = lsGet("maxChars", "200") === "0" ? "200" : lsGet("maxChars", "200");
   loadRecent();
+}
+
+const MODEL_SIZES = { small: "~0,5 ГБ", medium: "~1,5 ГБ", "large-v3-turbo": "~1,6 ГБ", "large-v3": "~3 ГБ" };
+
+function updateModelHint() {
+  const id = $("#modelSelect").value;
+  const m = (state.models || []).find((x) => x.id === id);
+  const hint = $("#modelHint");
+  hint.hidden = !m;
+  if (!m) return;
+  hint.classList.toggle("ok", m.downloaded);
+  hint.textContent = m.downloaded
+    ? "✓ Модель уже на этом компьютере, интернет не нужен"
+    : "⬇ Модель будет скачана из интернета при первом распознавании (" + (MODEL_SIZES[id] || "") + ")";
+}
+
+function fmtBytes(b) {
+  const mb = b / 1048576;
+  return mb >= 1024 ? (mb / 1024).toFixed(2).replace(".", ",") + " ГБ" : Math.round(mb) + " МБ";
+}
+
+function showDownload(d) {
+  $("#dlBox").hidden = !d;
+  $("#progressBar").hidden = !!d;
+  if (!d) return;
+  const p = d.total ? Math.min(1, d.done / d.total) : 0;
+  $("#dlPercent").textContent = d.total ? Math.floor(p * 100) + "%" : "";
+  setBar("#dlFill", p);
+  $("#dlSize").textContent = fmtBytes(d.done) + " из " + (d.exact ? "" : "~") + fmtBytes(d.total);
+  $("#dlSpeed").textContent = d.speed > 0 ? (d.speed / 1048576).toFixed(1).replace(".", ",") + " МБ/с" : "";
+  const left = d.speed > 0 && d.total > d.done ? (d.total - d.done) / d.speed : null;
+  $("#dlEta").textContent = left !== null ? "осталось ~" + fmtDuration(Math.max(1, left)) : "";
+  let warn = "";
+  if (d.done === 0 && d.stalled >= 10) {
+    warn = "Соединение с huggingface.co не устанавливается уже " + d.stalled + " с. Проверьте интернет или прокси. " +
+      "Без интернета модель можно положить вручную (см. README).";
+  } else if (d.stalled >= 20) {
+    warn = "Нет новых данных " + d.stalled + " с — похоже, соединение прервалось. Скачивание продолжится автоматически.";
+  }
+  if (d.attempt > 1) warn = ("Попытка " + d.attempt + " из 3: докачиваем с места обрыва. " + warn).trim();
+  $("#dlWarn").textContent = warn;
+  $("#dlWarn").hidden = !warn;
 }
 
 async function loadRecent() {
@@ -142,6 +186,7 @@ function upload() {
 function setBar(sel, p) { $(sel).style.width = Math.round(Math.max(0, Math.min(1, p)) * 100) + "%"; }
 
 function progressFail(msg) {
+  showDownload(null);
   $("#progressTitle").textContent = "Ошибка";
   $("#progressError").textContent = msg;
   $("#progressBack").hidden = false;
@@ -155,12 +200,18 @@ async function pollTranscription(id) {
     try { job = await (await api("/api/job/" + id)).json(); } catch (e) { return progressFail(e.message); }
     if (job.status === "error") return progressFail(job.error);
     if (job.status === "ready") return openEditor(job);
-    $("#progressMsg").textContent = job.message || "";
-    const p = job.progress || 0;
-    $("#progressFill").parentElement.classList.toggle("indeterminate", p <= 0);
-    setBar("#progressFill", p);
-    $("#progressTitle").textContent = "Распознавание… " + (p > 0 ? Math.round(p * 100) + "%" : "");
-    await new Promise((r) => setTimeout(r, 800));
+    showDownload(job.download);
+    if (job.download) {
+      $("#progressTitle").textContent = "Подготовка модели «" + job.model + "»";
+      $("#progressMsg").textContent = "Распознавание начнётся сразу после скачивания.";
+    } else {
+      $("#progressMsg").textContent = job.message || "";
+      const p = job.progress || 0;
+      $("#progressFill").parentElement.classList.toggle("indeterminate", p <= 0);
+      setBar("#progressFill", p);
+      $("#progressTitle").textContent = "Распознавание… " + (p > 0 ? Math.round(p * 100) + "%" : "");
+    }
+    await new Promise((r) => setTimeout(r, job.download ? 500 : 800));
   }
 }
 
@@ -522,7 +573,8 @@ function bind() {
   dz.addEventListener("drop", (e) => { if (e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]); });
   $("#skipAsr").onchange = () => { $("#uploadBtn").textContent = $("#skipAsr").checked ? "Далее" : "Распознать"; };
   $("#uploadBtn").onclick = upload;
-  $("#progressBack").onclick = () => { location.hash = ""; show("upload"); loadRecent(); };
+  $("#modelSelect").onchange = updateModelHint;
+  $("#progressBack").onclick = () => { location.hash = ""; show("upload"); initUpload(); };
   $("#homeLink").onclick = () => { $("#audio").pause(); location.hash = ""; setFile(null); show("upload"); loadRecent(); };
 
   $("#audio").addEventListener("timeupdate", onTimeUpdate);

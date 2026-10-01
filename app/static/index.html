@@ -34,6 +34,7 @@
       <div class="form-row">
         <label>Модель распознавания
           <select id="modelSelect"></select>
+          <span class="model-hint" id="modelHint" hidden></span>
         </label>
         <label>Язык
           <select id="langSelect">
@@ -69,8 +70,25 @@
     <div class="card progress-card">
       <h1 id="progressTitle">Распознавание…</h1>
       <p class="muted" id="progressMsg"></p>
-      <div class="bar"><div class="bar-fill" id="progressFill"></div></div>
-      <p class="muted small" id="progressHint">Первый запуск модели может занять несколько минут: она скачивается один раз и дальше работает без интернета.</p>
+      <div class="bar" id="progressBar"><div class="bar-fill" id="progressFill"></div></div>
+      <div class="dl-box" id="dlBox" hidden>
+        <div class="dl-head">
+          <span class="dl-icon">⬇</span>
+          <div>
+            <div class="dl-title" id="dlTitle">Скачивание модели из интернета</div>
+            <div class="muted small">Только при первом использовании модели. Дальше она работает без интернета.</div>
+          </div>
+          <span class="dl-percent" id="dlPercent"></span>
+        </div>
+        <div class="bar dl-bar"><div class="bar-fill" id="dlFill"></div></div>
+        <div class="dl-stats">
+          <span id="dlSize"></span>
+          <span id="dlSpeed"></span>
+          <span id="dlEta"></span>
+        </div>
+        <div class="dl-warn" id="dlWarn" hidden></div>
+      </div>
+      <p class="muted small" id="progressHint">Длительность зависит от длины записи и выбранной модели.</p>
       <div class="error" id="progressError"></div>
       <div class="actions"><button class="btn" id="progressBack" hidden>Назад</button></div>
     </div>

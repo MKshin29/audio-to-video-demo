@@ -100,11 +100,12 @@ def transcribe_worker(job):
                 status_cb=lambda m: update(job, message=m),
                 progress_cb=lambda p: job.update(progress=round(p, 3)),
                 max_chars=job.get("max_chars", 0),
+                download_cb=lambda info: job.update(download=info),
             )
-        update(job, status="ready", segments=segments, progress=1.0, message="Готово")
+        update(job, status="ready", segments=segments, progress=1.0, message="Готово", download=None)
     except Exception as e:
         traceback.print_exc()
-        update(job, status="error", error=str(e))
+        update(job, status="error", error=str(e), download=None)
 
 
 def render_worker(job, segments, out_name):

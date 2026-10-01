@@ -36,7 +36,7 @@ if errorlevel 1 (
 echo.
 set "MODEL=small"
 set /p "MODEL=[2/2] Какую модель скачать? small / medium / large-v3-turbo / large-v3 (Enter = small): "
-venv\Scripts\python.exe -c "import sys; from faster_whisper.utils import download_model; print(download_model(sys.argv[1], cache_dir='models'))" %MODEL%
+venv\Scripts\python.exe app\transcriber.py %MODEL%
 if errorlevel 1 (
     echo [ОШИБКА] Не удалось скачать модель.
     pause

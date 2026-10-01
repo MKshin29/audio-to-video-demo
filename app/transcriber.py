@@ -1,13 +1,22 @@
 """Распознавание речи (faster-whisper, полностью локально) и разметка реплик по говорящим."""
 import os
 import re
+import sys
 import threading
+import time
 
-import numpy as np
+# Скачивание моделей обычным HTTPS, без протокола Xet: так файл растёт на диске постепенно
+# (виден прогресс), а корпоративному прокси достаточно доступа к huggingface.co.
+# Задаётся до импорта huggingface_hub (он читает переменные при импорте).
+os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
+os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
 
-from audio_utils import read_wav
-from diarization import assign_speakers, label_robot_by_talk_time, trim_silence
-from segmenter import split_long
+import numpy as np  # noqa: E402
+
+from audio_utils import read_wav  # noqa: E402
+from diarization import assign_speakers, label_robot_by_talk_time, trim_silence  # noqa: E402
+from segmenter import split_long  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODELS_DIR = os.path.join(ROOT, "models")
@@ -24,6 +33,9 @@ HF_REPOS = {
     "large-v3": "Systran/faster-whisper-large-v3",
     "large-v3-turbo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
 }
+# Примерный размер в байтах — если узнать точный у HuggingFace не удалось
+APPROX_SIZES = {"small": 486e6, "medium": 1530e6, "large-v3-turbo": 1620e6, "large-v3": 3090e6}
+MODEL_FILES = re.compile(r"^(config\.json|preprocessor_config\.json|model\.bin|tokenizer\.json|vocabulary\..*)$")
 
 # Фразы, которые Whisper «галлюцинирует» на тишине и шуме
 HALLUCINATIONS = re.compile(
@@ -51,7 +63,76 @@ def model_downloaded(name):
     return False
 
 
-def get_model(name, status_cb):
+def _repo_dir(name):
+    return os.path.join(MODELS_DIR, "models--" + HF_REPOS.get(name, name).replace("/", "--"))
+
+
+def _dir_size(path):
+    total = 0
+    for root, _dirs, files in os.walk(path):
+        for f in files:
+            try:
+                total += os.path.getsize(os.path.join(root, f))
+            except OSError:
+                pass  # файл как раз переименовывают
+    return total
+
+
+def _model_total_size(name):
+    try:
+        from huggingface_hub import HfApi
+        info = HfApi().model_info(HF_REPOS[name], files_metadata=True, timeout=15)
+        total = sum(f.size or 0 for f in info.siblings if MODEL_FILES.match(f.rfilename))
+        if total > 0:
+            return total, True
+    except Exception:
+        pass
+    return int(APPROX_SIZES.get(name, 0)), False
+
+
+def download_with_progress(name, progress_cb, attempts=3):
+    """Скачивает модель в папку models, раз в полсекунды сообщая прогресс.
+
+    progress_cb(dict): done и total (байты), exact (точен ли total), speed (байт/с),
+    stalled (сколько секунд нет новых данных), attempt (номер попытки).
+    """
+    from faster_whisper.utils import download_model
+
+    total, exact = _model_total_size(name)
+    repo_dir = _repo_dir(name)
+    last_error = None
+    for attempt in range(1, attempts + 1):
+        result = {}
+
+        def run():
+            try:
+                result["path"] = download_model(name, cache_dir=MODELS_DIR)
+            except Exception as e:  # показываем пользователю любую причину
+                result["error"] = e
+
+        th = threading.Thread(target=run, daemon=True)
+        th.start()
+        history = []  # (время, байт) за последние секунды — для расчёта скорости
+        last_change, last_done = time.time(), -1
+        while th.is_alive():
+            now, done = time.time(), _dir_size(repo_dir)
+            if done != last_done:
+                last_change, last_done = now, done
+            history = [(t, d) for t, d in history if now - t <= 4] + [(now, done)]
+            speed = (history[-1][1] - history[0][1]) / max(0.5, history[-1][0] - history[0][0])
+            progress_cb({"done": min(done, total) if total else done, "total": total, "exact": exact,
+                         "speed": max(0.0, speed), "stalled": round(now - last_change), "attempt": attempt})
+            th.join(0.5)
+        if "path" in result:
+            progress_cb({"done": total, "total": total, "exact": exact, "speed": 0.0, "stalled": 0,
+                         "attempt": attempt})
+            return result["path"]
+        last_error = result.get("error")
+        time.sleep(2)  # следующая попытка докачает файл с места обрыва
+    raise last_error
+
+
+def get_model(name, status_cb, download_cb=None):
     from faster_whisper import WhisperModel
 
     with _model_lock:
@@ -68,10 +149,16 @@ def get_model(name, status_cb):
                 status_cb("Загрузка модели «%s»…" % name)
                 model = WhisperModel(name, download_root=MODELS_DIR, local_files_only=True, **kwargs)
             except Exception:
-                status_cb("Скачивание модели «%s» (только при первом использовании, может занять несколько минут)…" % name)
+                status_cb("Скачивание модели «%s» из интернета (только при первом использовании)…" % name)
                 try:
-                    model = WhisperModel(name, download_root=MODELS_DIR, **kwargs)
+                    path = download_with_progress(name, download_cb or (lambda info: None))
+                    if download_cb:
+                        download_cb(None)
+                    status_cb("Загрузка модели «%s»…" % name)
+                    model = WhisperModel(path, **kwargs)
                 except Exception as e:
+                    if download_cb:
+                        download_cb(None)
                     raise RuntimeError(
                         "Не удалось скачать модель «%s». Нужен доступ в интернет при первом запуске "
                         "или ручная установка модели в папку models\\%s (см. README). Детали: %s" % (name, name, e))
@@ -189,14 +276,14 @@ def _channels_are_separate(stereo):
     return not np.isfinite(corr) or abs(corr) < 0.8
 
 
-def transcribe(asr_wav, model_name, language, status_cb, progress_cb, max_chars=0):
+def transcribe(asr_wav, model_name, language, status_cb, progress_cb, max_chars=0, download_cb=None):
     """Возвращает список реплик [{speaker, start, end, text}], отсортированных по времени.
 
     max_chars > 0 — длинные фразы делятся на несколько баблов по предложениям.
     """
     audio, rate = read_wav(asr_wav)
     assert rate == 16000
-    model = get_model(model_name, status_cb)
+    model = get_model(model_name, status_cb, download_cb)
 
     if audio.shape[0] == 2 and _channels_are_separate(audio):
         segments = []
@@ -226,3 +313,31 @@ def transcribe(asr_wav, model_name, language, status_cb, progress_cb, max_chars=
         segments = split_long(segments, max_chars)
     return [{"speaker": s["speaker"], "start": round(float(s["start"]), 2), "end": round(float(s["end"]), 2),
              "text": s["text"]} for s in segments]
+
+
+def _console_download(name):
+    """`python app/transcriber.py <модель>` — скачать модель с прогрессом в консоли (prepare_offline.bat)."""
+    if name not in HF_REPOS:
+        sys.exit("Неизвестная модель: %s. Доступны: %s" % (name, ", ".join(HF_REPOS)))
+    if model_downloaded(name):
+        print("Модель «%s» уже скачана." % name)
+        return
+    mb = 1024 * 1024
+
+    def show(info):
+        line = "  %6.0f / %.0f МБ" % (info["done"] / mb, info["total"] / mb)
+        if info["total"]:
+            line += "  (%3d%%)" % (100 * info["done"] / info["total"])
+        line += "  %5.1f МБ/с" % (info["speed"] / mb)
+        if info["stalled"] >= 15:
+            line += "  нет данных %d с" % info["stalled"]
+        sys.stdout.write("\r" + line.ljust(70))
+        sys.stdout.flush()
+
+    print("Скачивание модели «%s»…" % name)
+    path = download_with_progress(name, show)
+    print("\nГотово: %s" % path)
+
+
+if __name__ == "__main__":
+    _console_download(sys.argv[1] if len(sys.argv) > 1 else "small")
