@@ -56,11 +56,33 @@
    Библиотеки установятся из `wheels`, интернет не понадобится.
 
 **Вариант 2: только модель вручную.** Если библиотеки ставятся (например, через корпоративное зеркало PyPI),
-а huggingface.co закрыт, скачайте файлы модели на другом компьютере, например
-<https://huggingface.co/Systran/faster-whisper-small/tree/main>
-(`model.bin`, `config.json`, `tokenizer.json`, `vocabulary.txt`), и положите их в `models\small\`.
-Для других моделей используйте `Systran/faster-whisper-medium` → `models\medium\`,
-`mobiuslabsgmbh/faster-whisper-large-v3-turbo` → `models\large-v3-turbo\` и т. п.
+а huggingface.co закрыт, скачайте файлы модели на другом компьютере и положите их в папку
+`models\<имя модели>\` внутри папки инструмента. Нужны только перечисленные файлы, `README.md` и
+`.gitattributes` из репозитория не нужны. Имена файлов менять нельзя.
+
+```
+audio-to-video\
+  models\
+    small\
+      config.json
+      model.bin
+      tokenizer.json
+      vocabulary.txt
+```
+
+| Модель | Папка | Размер | Файлы (прямые ссылки) |
+|---|---|---|---|
+| small | `models\small\` | ~465 МБ | [config.json](https://huggingface.co/Systran/faster-whisper-small/resolve/main/config.json?download=true), [model.bin](https://huggingface.co/Systran/faster-whisper-small/resolve/main/model.bin?download=true), [tokenizer.json](https://huggingface.co/Systran/faster-whisper-small/resolve/main/tokenizer.json?download=true), [vocabulary.txt](https://huggingface.co/Systran/faster-whisper-small/resolve/main/vocabulary.txt?download=true) |
+| medium | `models\medium\` | ~1,5 ГБ | [config.json](https://huggingface.co/Systran/faster-whisper-medium/resolve/main/config.json?download=true), [model.bin](https://huggingface.co/Systran/faster-whisper-medium/resolve/main/model.bin?download=true), [tokenizer.json](https://huggingface.co/Systran/faster-whisper-medium/resolve/main/tokenizer.json?download=true), [vocabulary.txt](https://huggingface.co/Systran/faster-whisper-medium/resolve/main/vocabulary.txt?download=true) |
+| large-v3-turbo | `models\large-v3-turbo\` | ~1,6 ГБ | [config.json](https://huggingface.co/mobiuslabsgmbh/faster-whisper-large-v3-turbo/resolve/main/config.json?download=true), [model.bin](https://huggingface.co/mobiuslabsgmbh/faster-whisper-large-v3-turbo/resolve/main/model.bin?download=true), [preprocessor_config.json](https://huggingface.co/mobiuslabsgmbh/faster-whisper-large-v3-turbo/resolve/main/preprocessor_config.json?download=true), [tokenizer.json](https://huggingface.co/mobiuslabsgmbh/faster-whisper-large-v3-turbo/resolve/main/tokenizer.json?download=true), [vocabulary.json](https://huggingface.co/mobiuslabsgmbh/faster-whisper-large-v3-turbo/resolve/main/vocabulary.json?download=true) |
+| large-v3 | `models\large-v3\` | ~3 ГБ | [config.json](https://huggingface.co/Systran/faster-whisper-large-v3/resolve/main/config.json?download=true), [model.bin](https://huggingface.co/Systran/faster-whisper-large-v3/resolve/main/model.bin?download=true), [preprocessor_config.json](https://huggingface.co/Systran/faster-whisper-large-v3/resolve/main/preprocessor_config.json?download=true), [tokenizer.json](https://huggingface.co/Systran/faster-whisper-large-v3/resolve/main/tokenizer.json?download=true), [vocabulary.json](https://huggingface.co/Systran/faster-whisper-large-v3/resolve/main/vocabulary.json?download=true) |
+
+Все файлы модели одной страницей: `https://huggingface.co/<репозиторий>/tree/main`, например
+<https://huggingface.co/Systran/faster-whisper-small/tree/main>.
+У large-моделей обязателен `preprocessor_config.json`, а словарь называется `vocabulary.json`.
+
+Положенная вручную модель имеет приоритет над скачанной автоматически. После перезапуска
+`start.bat` она отмечается в списке как «✓ скачана».
 
 Если pip работает через прокси, задайте его перед запуском, например `set HTTPS_PROXY=http://proxy:3128`,
 или в `%APPDATA%\pip\pip.ini`.
